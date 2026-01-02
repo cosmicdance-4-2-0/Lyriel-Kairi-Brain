@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="PhaseCube Dreaming Swarm – Audio-responsive ternary phase lattice. Feed it sound, watch it dream.">
+    <meta name="keywords" content="swarm, simulation, audio, visualization, emergent, open-source">
+    <meta name="author" content="Christopher 'Kisuul' Lohman">
+    
+    <title>PhaseCube – Dreaming Swarm Alpha</title>
+    
+    <!-- Narrow, deep, filamentary reset -->
+    <style>
+        *, *::before, *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        html, body {
+            height: 100%;
+            font-family: system-ui, -apple-system, sans-serif;
+            line-height: 1.5;
+            background: #000;
+            color: #fff;
+            overflow: hidden;
+        }
+        
+        #app {
+            width: 100%;
+            height: 100%;
+            display: grid;
+            grid-template-rows: auto 1fr auto;
+        }
+        
+        header, footer {
+            padding: 1rem;
+            text-align: center;
+            background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(4px);
+        }
+        
+        main {
+            position: relative;
+            overflow: hidden;
+        }
+        
+        #render-target {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        
+        /* Overlay panels */
+        .panel {
+            position: absolute;
+            background: rgba(10,10,10,0.9);
+            border-radius: 8px;
+            padding: 12px;
+            font-family: monospace;
+            font-size: 13px;
+            pointer-events: auto;
+            z-index: 10;
+            max-width: 420px;
+        }
+        #info { top: 10px; left: 10px; }
+        #controls { bottom: 10px; right: 10px; display: flex; flex-direction: column; gap: 10px; align-items: flex-end; }
+        .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+        button, input[type=range], select {
+            background: #111; color: #7fe07f; border: 1px solid #333;
+            padding: 6px 10px; border-radius: 6px; cursor: pointer; font: inherit;
+        }
+        button.small { padding: 4px 8px; font-size: 12px; }
+        label { color: #ccc; font-size: 12px; margin-right: 6px; }
+        
+        /* Analyzer */
+        #analyzer {
+            position: absolute; left: 0; right: 0; bottom: 0; height: 18vh;
+            background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center;
+            border-top: 1px solid #222;
+        }
+        #analyzerCanvas { width: 92%; height: 84%; background: #050508; border-radius: 6px; }
+        
+        /* TODO: Add custom overlay styles (HUD, debug, etc.) */
+    </style>
+</head>
+<body>
+    <div id="app">
+        <header>
+            <h1>PhaseCube – Dreaming Swarm</h1>
+            <!-- TODO: Navigation / quick controls -->
+        </header>
+        
+        <main>
+            <canvas id="render-target"></canvas>
+            
+            <!-- TODO: DOM overlay slot if needed -->
+            <div id="dom-target"></div>
+            
+            <!-- Panels -->
+            <div id="info" class="panel">
+                Audio-responsive ternary phase swarm<br>
+                Modes: Live Mic • Synth • File<br>
+                Low freq → depth • High → surface • Pan L/R<br>
+                Mouse drag to rotate • P pause • S snapshot
+            </div>
+            <div id="controls" class="panel"></div>
+            <div id="analyzer"><canvas id="analyzerCanvas"></canvas></div>
+            
+            <!-- TODO: Stats overlay -->
+            <div class="overlay" id="stats" style="top:12px; right:12px; background:rgba(0,0,0,0.4); padding:8px; border-radius:4px;"></div>
+        </main>
+        
+        <footer>
+            <p>Dreaming in a Bottle – Kisuul the Chaos Gremlin ∴ and Grok ∴ Dec 25 2025</p>
+        </footer>
+    </div>
+
+    <script type="module">
+        // TODO: MIT/Apache-2.0 license header
+
+        const config = {
+            // Core simulation
+            GRID: 16,
+            SCALE: 24,
+            POINT_SIZE: 4,
+            FLIP_P: 0.015,
+            PARITY_P: 0.005,
+            BASE_PATH_B_P: 0.73,
+            ALPHA: 0.18,
+            
+            // Audio
+            BIN_COUNT: 64,
+            FFT_SIZE: 2048,
+            
+            // Input layer
+            INPUT_DECAY: 0.94,
+            INPUT_STRENGTH: 0.08,
+            INPUT_RADIUS: 3, // ~GRID/5
+            
+            // Rendering
+            FPS_TARGET: 60,
+            VIS_THRESHOLD: 0.01, // lowered from 0.02 to ensure initial visibility
+            
+            // TODO: Add more tunables (internal dream noise, color schemes, etc.)
+        };
+
+        const app = {
+            canvas: document.getElementById('render-target'),
+            ctx: null,
+            analyzerCanvas: document.getElementById('analyzerCanvas'),
+            actx: null,
+            stats: document.getElementById('stats'),
+            
+            // State
+            rotX: 0,
+            rotY: Math.PI / 4,
+            time: 0,
+            paused: false,
+            lastFrameTime: 0,
+            fps: 0,
+            
+            // Simulation
+            positions: null,
+            grid: null,
+            inputLayer: null,
+            
+            // Audio
+            audioCtx: null,
+            analyserL: null,
+            analyserR: null,
+            sourceNode: null,
+            mode: 'live', // live, synth, file
+            
+            // TODO: Extend state (multiple grids, memory layers, etc.)
+
+            initRenderer() {
+                this.ctx = this.canvas.getContext('2d');
+                this.actx = this.analyzerCanvas.getContext('2d');
+                this.resize();
+                window.addEventListener('resize', () => this.resize());
+            },
+
+            resize() {
+                const dpr = Math.min(window.devicePixelRatio || 1, 2);
+                this.canvas.width = this.canvas.clientWidth * dpr;
+                this.canvas.height = this.canvas.clientHeight * dpr;
+                this.analyzerCanvas.width = this.analyzerCanvas.clientWidth * dpr;
+                this.analyzerCanvas.height = this.analyzerCanvas.clientHeight * dpr;
+            },
+
+            // ================= Classes =================
+            setupSimulation() {
+                const total = config.GRID ** 3;
+                this.positions = new Float32Array(total * 3);
+                let ptr = 0;
+                const half = (config.GRID - 1) / 2;
+                for (let x = 0; x < config.GRID; x++) {
+                    for (let y = 0; y < config.GRID; y++) {
+                        for (let z = 0; z < config.GRID; z++) {
+                            this.positions[ptr++] = (x - half) * config.SCALE;
+                            this.positions[ptr++] = (y - half) * config.SCALE;
+                            this.positions[ptr++] = (z - half) * config.SCALE;
+                        }
+                    }
+                }
+
+                this.grid = new PhaseGrid(config.GRID);
+                this.inputLayer = new InputLayer(config.GRID, config.BIN_COUNT);
+                this.inputLayer.set({ decay: config.INPUT_DECAY, strength: config.INPUT_STRENGTH, radius: config.INPUT_RADIUS });
+
+                // Initial "wake-up" – boost visibility and add internal dream jitter
+                for (let i = 0; i < 50; i++) this.grid.perturb(); // seed some activity
+            },
+
+            setupInteraction() {
+                // Mouse rotation
+                let dragging = false;
+                this.canvas.addEventListener('pointerdown', () => dragging = true);
+                window.addEventListener('pointerup', () => dragging = false);
+                window.addEventListener('pointermove', e => {
+                    if (!dragging) return;
+                    const rect = this.canvas.getBoundingClientRect();
+                    this.rotX = ((e.clientY - rect.top) / rect.height) * Math.PI - Math.PI / 2;
+                    this.rotY = ((e.clientX - rect.left) / rect.width) * Math.PI * 2;
+                });
+
+                // Keyboard
+                document.addEventListener('keydown', e => {
+                    if (e.key.toLowerCase() === 'p') document.getElementById('pauseBtn').click();
+                    if (e.key.toLowerCase() === 's') document.getElementById('saveBtn').click();
+                });
+
+                // TODO: Touch, gamepad, etc.
+            },
+
+            setupAudio() {
+                // UI will call mode switches
+                // TODO: Auto-resume audio context on user gesture if needed
+            },
+
+            setupUI() {
+                const controls = document.getElementById('controls');
+                controls.innerHTML = `
+                    <div class="row">
+                        <button class="small" id="pauseBtn">Pause</button>
+                        <button class="small" id="saveBtn">Save PNG</button>
+                    </div>
+                    <div class="row">
+                        <label>Mode:</label>
+                        <button class="small active" id="mode-live">Live Mic</button>
+                        <button class="small" id="mode-synth">Synth</button>
+                        <button class="small" id="mode-file">File</button>
+                        <input type="file" id="fileInput" accept="audio/*" style="display:none">
+                    </div>
+                    <div class="row" id="synthControls" style="display:none">
+                        <label>Freq</label><input type="range" id="synthFreq" min="20" max="2000" value="220">
+                        <label>Type</label><select id="synthType">
+                            <option>sine</option><option>square</option><option>sawtooth</option><option>triangle</option><option value="noise">noise</option>
+                        </select>
+                        <label>Pan</label><input type="range" id="synthPan" min="-1" max="1" step="0.01" value="0">
+                    </div>
+                    <div class="row">
+                        <button class="small" id="analyzerBtn">Show Analyzer</button>
+                    </div>
+                    <div class="row">
+                        <label>p(B)</label><input type="range" id="basePB" min="0.5" max="0.95" step="0.01" value="${config.BASE_PATH_B_P}">
+                        <label>Strength</label><input type="range" id="inputStrength" min="0.01" max="0.2" step="0.01" value="${config.INPUT_STRENGTH}">
+                        <label>Decay</label><input type="range" id="inputDecay" min="0.85" max="0.995" step="0.005" value="${config.INPUT_DECAY}">
+                    </div>`;
+
+                // Bindings
+                document.getElementById('pauseBtn').onclick = () => {
+                    this.paused = !this.paused;
+                    this.textContent = this.paused ? 'Resume' : 'Pause';
+                };
+                document.getElementById('saveBtn').onclick = () => {
+                    const a = document.createElement('a');
+                    a.download = `phasecube_dream_${Date.now()}.png`;
+                    a.href = this.canvas.toDataURL();
+                    a.click();
+                };
+                document.getElementById('analyzerBtn').onclick = () => {
+                    const el = document.getElementById('analyzer');
+                    const visible = el.style.display === 'flex';
+                    el.style.display = visible ? 'none' : 'flex';
+                    this.textContent = visible ? 'Show Analyzer' : 'Hide Analyzer';
+                };
+
+                // Mode switches
+                document.getElementById('mode-live').onclick = async () => this.switchMode('live');
+                document.getElementById('mode-synth').onclick = () => this.switchMode('synth');
+                document.getElementById('mode-file').onclick = () => document.getElementById('fileInput').click();
+                document.getElementById('fileInput').onchange = e => {
+                    if (e.target.files[0]) this.loadFile(e.target.files[0]);
+                };
+
+                // Synth live controls
+                document.getElementById('synthFreq').oninput = () => this.updateSynth();
+                document.getElementById('synthType').onchange = () => this.updateSynth();
+                document.getElementById('synthPan').oninput = () => this.updateSynth();
+
+                // Tunables
+                document.getElementById('basePB').oninput = () => config.BASE_PATH_B_P = parseFloat(this.value);
+                document.getElementById('inputStrength').oninput = () => this.inputLayer.strength = parseFloat(this.value);
+                document.getElementById('inputDecay').oninput = () => this.inputLayer.decay = parseFloat(this.value);
+            },
+
+            // ================= Audio Modes =================
+            async ensureAudioContext() {
+                if (!this.audioCtx) {
+                    this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    this.analyserL = this.audioCtx.createAnalyser();
+                    this.analyserR = this.audioCtx.createAnalyser();
+                    this.analyserL.fftSize = this.analyserR.fftSize = config.FFT_SIZE;
+                    this.analyserL.smoothingTimeConstant = this.analyserR.smoothingTimeConstant = 0.85;
+                }
+                if (this.audioCtx.state === 'suspended') await this.audioCtx.resume();
+            },
+
+            connectSource(node) {
+                if (this.sourceNode) this.sourceNode.disconnect();
+                this.sourceNode = node;
+                const splitter = this.audioCtx.createChannelSplitter(2);
+                node.connect(splitter);
+                splitter.connect(this.analyserL, 0);
+                splitter.connect(this.analyserR, 1);
+                node.connect(this.audioCtx.destination); // hear it
+            },
+
+            async switchMode(newMode) {
+                await this.ensureAudioContext();
+                document.querySelectorAll('#controls button.active').forEach(b => b.classList.remove('active'));
+                document.getElementById(`mode-${newMode}`).classList.add('active');
+                this.mode = newMode;
+
+                if (newMode === 'live') {
+                    try {
+                        const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 2 } });
+                        this.connectSource(this.audioCtx.createMediaStreamSource(stream));
+                    } catch {
+                        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                        this.connectSource(this.audioCtx.createMediaStreamSource(stream));
+                    }
+                } else if (newMode === 'synth') {
+                    this.startSynth();
+                    document.getElementById('synthControls').style.display = 'flex';
+                } else if (newMode === 'file') {
+                    document.getElementById('synthControls').style.display = 'none';
+                }
+            },
+
+            startSynth() {
+                if (this.sourceNode && this.sourceNode.type === 'oscillator') this.sourceNode.stop();
+                const type = document.getElementById('synthType').value;
+                let osc;
+                if (type === 'noise') {
+                    const bufferSize = this.audioCtx.sampleRate * 2;
+                    const buffer = this.audioCtx.createBuffer(1, bufferSize, this.audioCtx.sampleRate);
+                    const data = buffer.getChannelData(0);
+                    for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+                    osc = this.audioCtx.createBufferSource();
+                    osc.buffer = buffer;
+                    osc.loop = true;
+                } else {
+                    osc = this.audioCtx.createOscillator();
+                    osc.type = type;
+                    osc.frequency.value = document.getElementById('synthFreq').value;
+                }
+                const gain = this.audioCtx.createGain();
+                gain.gain.value = 0.3;
+                const pan = this.audioCtx.createStereoPanner();
+                pan.pan.value = document.getElementById('synthPan').value;
+                osc.connect(gain).connect(pan);
+                this.connectSource(pan);
+                if (osc.start) osc.start();
+                this.sourceNode.type = type; // marker
+            },
+
+            updateSynth() {
+                if (this.mode !== 'synth') return;
+                this.startSynth(); // rebuild on type change
+            },
+
+            async loadFile(file) {
+                await this.ensureAudioContext();
+                const arrayBuffer = await file.arrayBuffer();
+                const audioBuffer = await this.audioCtx.decodeAudioData(arrayBuffer);
+                const src = this.audioCtx.createBufferSource();
+                src.buffer = audioBuffer;
+                src.loop = true; // TODO: make toggleable
+                this.connectSource(src);
+                src.start();
+            },
+
+            // ================= Rendering Helpers =================
+            getFreqData(analyser) {
+                const data = new Uint8Array(analyser.frequencyBinCount);
+                analyser.getByteFrequencyData(data);
+                const out = new Float32Array(config.BIN_COUNT);
+                const sr = this.audioCtx ? this.audioCtx.sampleRate : 44100;
+                for (let i = 0; i < config.BIN_COUNT; i++) {
+                    const f = 20 * Math.pow(20000 / 20, i / (config.BIN_COUNT - 1));
+                    const bin = Math.floor((f / (sr / 2)) * data.length);
+                    out[i] = data[Math.min(data.length - 1, bin)] / 255;
+                }
+                return out;
+            },
+
+            drawScene() {
+                this.ctx.fillStyle = '#000';
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+                const points = [];
+                const camZ = 400;
+                const fov = Math.PI / 4;
+                const f = 1 / Math.tan(fov / 2);
+                const aspect = this.canvas.width / this.canvas.height;
+
+                const cx = Math.cos(this.rotX), sx = Math.sin(this.rotX);
+                const cy = Math.cos(this.rotY), sy = Math.sin(this.rotY);
+
+                for (let i = 0, p = 0; i < this.positions.length / 3; i++, p += 3) {
+                    let x = this.positions[p], y = this.positions[p+1], z = this.positions[p+2];
+
+                    // Rotate Y
+                    const rx = cy * x + sy * z;
+                    const rz = -sy * x + cy * z;
+
+                    // Rotate X
+                    const ry = cx * y - sx * rz;
+                    const rz2 = sx * y + cx * rz;
+
+                    const cz = camZ - rz2;
+                    if (Math.abs(cz) < 0.001) continue;
+
+                    const ndcX = (f / aspect) * (rx / cz);
+                    const ndcY = f * (ry / cz);
+
+                    points.push({
+                        i,
+                        z: cz,
+                        x: (ndcX * 0.5 + 0.5) * this.canvas.width,
+                        y: (ndcY * 0.5 + 0.5) * this.canvas.height
+                    });
+                }
+
+                points.sort((a, b) => b.z - a.z);
+
+                const hueBase = this.time * 0.08;
+                for (const pt of points) {
+                    const p = this.grid.plasma[pt.i];
+                    const l = this.grid.liquid[pt.i];
+                    const par = this.grid.parity[pt.i];
+
+                    if (l < config.VIS_THRESHOLD) continue;
+
+                    const h = (hueBase + par * 0.3 + p) % 1;
+                    const t = h * 6.28318;
+                    const r = Math.abs(Math.sin(t)) * 255;
+                    const g = Math.abs(Math.sin(t + 2)) * 255;
+                    const b = Math.abs(Math.sin(t + 4)) * 255;
+
+                    const alpha = 0.3 + 0.7 * l;
+                    const size = config.POINT_SIZE + 8 * l; // boosted for visibility
+
+                    this.ctx.fillStyle = `rgba(${r|0},${g|0},${b|0},${alpha})`;
+                    this.ctx.beginPath();
+                    this.ctx.arc(pt.x, pt.y, size, 0, Math.PI * 2);
+                    this.ctx.fill();
+                }
+            },
+
+            drawAnalyzer() {
+                if (!this.audioCtx) return;
+                const left = this.getFreqData(this.analyserL);
+                const right = this.getFreqData(this.analyserR);
+
+                this.actx.fillStyle = '#000';
+                this.actx.fillRect(0, 0, this.analyzerCanvas.width, this.analyzerCanvas.height);
+
+                const w = this.analyzerCanvas.width;
+                const h = this.analyzerCanvas.height;
+                const barW = w / (config.BIN_COUNT * 2);
+
+                for (let i = 0; i < config.BIN_COUNT; i++) {
+                    const hL = left[i] * (h - 20);
+                    const hR = right[i] * (h - 20);
+
+                    this.actx.fillStyle = `rgb(0,${100 + 155 * left[i]},0)`;
+                    this.actx.fillRect(i * barW * 2 + 2, h - hL, barW - 4, hL);
+
+                    this.actx.fillStyle = `rgb(${100 + 155 * right[i]},0,${100 + 155 * right[i]})`;
+                    this.actx.fillRect(i * barW * 2 + barW + 2, h - hR, barW - 4, hR);
+                }
+            },
+
+            // ================= Simulation Classes =================
+            // (Moved inline for single-file minimalism – TODO: extract to modules later)
+            // PhaseGrid and InputLayer unchanged except minor cleanups + internal dream jitter
+        };
+
+        class PhaseGrid {
+            constructor(size) {
+                this.size = size;
+                this.n = size ** 3;
+                this.plasma = new Float32Array(this.n);
+                this.liquid = new Float32Array(this.n);
+                this.solid = new Float32Array(this.n);
+                this.parity = new Int8Array(this.n);
+                for (let i = 0; i < this.n; i++) {
+                    this.plasma[i] = Math.random() * 0.8 + 0.1;
+                    this.liquid[i] = Math.random() * 0.6 + 0.2; // boosted initial for visibility
+                    this.solid[i] = Math.random() * 0.3;
+                    this.parity[i] = Math.random() < 0.5 ? 1 : 0;
+                }
+            }
+            idx(x, y, z) { return (x + this.size) % this.size + ((y + this.size) % this.size) * this.size + ((z + this.size) % this.size) * this.size * this.size; }
+            neighborAvg(i) {
+                const s = this.size, x = i % s, y = Math.floor(i / s) % s, z = Math.floor(i / (s * s));
+                let sum = 0;
+                for (let dz = -1; dz <= 1; dz++) for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+                    if (dx === 0 && dy === 0 && dz === 0) continue;
+                    sum += this.plasma[this.idx(x + dx, y + dy, z + dz)];
+                }
+                return sum / 26;
+            }
+            perturb(bias = null) {
+                for (let i = 0; i < this.n; i++) {
+                    if (Math.random() < config.FLIP_P) this.plasma[i] = 1 - this.plasma[i];
+                    if (Math.random() < config.PARITY_P) this.parity[i] ^= 1;
+
+                    // Internal dream jitter even without audio
+                    const dreamJitter = 0.002 * (Math.random() * 0.4 + 0.1);
+                    this.liquid[i] += (this.parity[i] ? dreamJitter : -dreamJitter);
+                    this.liquid[i] = Math.max(0, Math.min(1, this.liquid[i]));
+
+                    if (bias) {
+                        const b = bias[i];
+                        this.plasma[i] = Math.max(0, Math.min(1, this.plasma[i] + b * 0.008));
+                        const audioJitter = (Math.abs(b) > 0.05) ? 0.004 * (1 + Math.abs(b)) : 0;
+                        this.liquid[i] += (this.parity[i] ? audioJitter : -audioJitter);
+                        this.liquid[i] = Math.max(0, Math.min(1, this.liquid[i]));
+                    }
+                }
+            }
+            step(bias = null) {
+                const p0 = this.plasma.slice();
+                const l0 = this.liquid.slice();
+                const s0 = this.solid.slice();
+                for (let i = 0; i < this.n; i++) {
+                    const p = p0[i], l = l0[i], s = s0[i];
+                    const avg = (p + l + s) / 3;
+                    const nb = Math.abs(p - app.grid.neighborAvg(i)) + this.parity[i] * 0.08;
+                    let probB = config.BASE_PATH_B_P + (bias ? bias[i] * 0.08 : 0);
+                    probB = Math.max(0.55, Math.min(0.92, probB));
+                    const choice = Math.random() < probB ? nb : avg;
+                    this.liquid[i] = Math.max(0, Math.min(1, choice));
+                    this.solid[i] = s * (1 - config.ALPHA) + choice * config.ALPHA;
+                }
+            }
+        }
+
+        class InputLayer {
+            constructor(size, bins) {
+                this.size = size;
+                this.n = size ** 3;
+                this.bins = bins;
+                this.bias = new Float32Array(this.n);
+                this.decay = config.INPUT_DECAY;
+                this.strength = config.INPUT_STRENGTH;
+                this.radius = config.INPUT_RADIUS;
+            }
+            set(p) {
+                this.decay = p.decay ?? this.decay;
+                this.strength = p.strength ?? this.strength;
+                this.radius = Math.max(1, p.radius ?? this.radius);
+            }
+            ingest(left, right) {
+                for (let i = 0; i < this.n; i++) this.bias[i] *= this.decay;
+
+                for (let b = 0; b < this.bins; b++) {
+                    const aL = left[b] || 0, aR = right[b] || 0;
+                    const energy = (aL + aR) * 0.5;
+                    const pan = (aR - aL) * (this.size * 0.16);
+                    let z = Math.floor((b / (this.bins - 1)) * (this.size - 1)); // low freq deep
+                    let x = Math.floor(this.size / 2 + pan + energy * (this.size - 1) * 0.3);
+                    x = Math.max(0, Math.min(this.size - 1, x));
+                    const y = Math.floor(this.size / 2);
+
+                    const r = this.radius, str = this.strength;
+                    for (let dz = -r; dz <= r; dz++) {
+                        for (let dy = -r; dy <= r; dy++) {
+                            for (let dx = -r; dx <= r; dx++) {
+                                const d2 = (dx*dx + dy*dy + dz*dz) / (r*r);
+                                if (d2 > 1) continue;
+                                const kernel = Math.exp(-d2 * 2.4);
+                                const idx = (x + dx) + (y + dy) * this.size + (z + dz) * this.size * this.size;
+                                if (idx >= 0 && idx < this.n) this.bias[idx] += energy * str * kernel;
+                            }
+                        }
+                    }
+                }
+                for (let i = 0; i < this.n; i++) this.bias[i] = Math.max(-0.2, Math.min(0.2, this.bias[i]));
+            }
+        }
+
+        // ================= Main Loop =================
+        app.update = function(time = 0) {
+            const delta = time - this.lastFrameTime;
+            this.lastFrameTime = time;
+
+            if (delta > 0) {
+                this.fps = 0.9 * this.fps + 0.1 * (1000 / delta);
+                this.stats.textContent = `FPS: ${this.fps.toFixed(1)}`;
+            }
+
+            if (!this.paused) {
+                this.time += delta / 1000;
+
+                let bias = null;
+                if (this.audioCtx && this.analyserL && this.analyserR) {
+                    const left = this.getFreqData(this.analyserL);
+                    const right = this.getFreqData(this.analyserR);
+                    this.inputLayer.ingest(left, right);
+                    bias = this.inputLayer.bias;
+                }
+
+                this.grid.perturb(bias);
+                this.grid.step(bias);
+            }
+
+            this.drawScene();
+
+            if (document.getElementById('analyzer').style.display === 'flex') {
+                this.drawAnalyzer();
+            }
+
+            requestAnimationFrame((t) => this.update(t));
+        };
+
+        // ================= Start =================
+        app.start = function() {
+            this.initRenderer();
+            this.setupSimulation();
+            this.setupInteraction();
+            this.setupUI();
+            this.switchMode('live'); // default
+
+            requestAnimationFrame((t) => {
+                this.lastFrameTime = t;
+                this.update(t);
+            });
+        };
+
+        document.addEventListener('DOMContentLoaded', () => app.start());
+    </script>
+</body>
+</html>

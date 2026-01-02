@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>PhaseCube — Stereo Ears Edition</title>
+<style>
+    body { margin:0; background:#000; overflow:hidden; font-family:monospace; color:#fff; }
+    canvas { display:block; }
+    #info { position:absolute; top:10px; left:10px; z-index:10; }
+    #controls { position:absolute; bottom:10px; left:10px; z-index:10; }
+    button {
+        background:#333; color:#fff; border:1px solid #666;
+        padding:5px 10px; margin:2px; cursor:pointer;
+    }
+    button:hover { background:#555; }
+    #analyzer { position:absolute; bottom:10px; right:10px; width:200px; height:100px; z-index:10; }
+</style>
+</head>
+<body>
+
+<canvas id="canvas"></canvas>
+<div id="info">PhaseCube w/ Ears — Press S to save PNG. Move mouse to rotate. Click Start Ears for live audio.</div>
+<div id="controls">
+    <button onclick="saveSnapshot()">Save PNG</button>
+    <button onclick="togglePause()" id="pauseBtn">Pause/Resume</button>
+    <button onclick="toggleEars()" id="earsBtn">Start Ears</button>
+</div>
+<canvas id="analyzer" style="border:1px solid #666;"></canvas>
+
+<script>
+/* ---------------- Config ---------------- */
+const WIDTH = 800, HEIGHT = 800;
+const GRID = 16, SCALE = 25;
+const FPS = 60, POINT_SIZE = 3;
+const FLIP_P = 0.02, PARITY_P = 0.01, PATH_B_P = 0.65, ALPHA = 0.18;
+
+// Audio Config
+const BIN_COUNT = 128; // Frequency bins (tuples of floats 0-1)
+const FFT_SIZE = 2048;
+const HOP_SIZE = 512; // ~20ms at 44.1kHz
+const MIN_FREQ = 20, MAX_FREQ = 20000;
+const AUDIO_GAIN = 0.3; // How hard audio pokes the plasma
+
+/* ---------------- State ---------------- */
+let canvas, ctx;
+let rotX = 0, rotY = 0;
+let time = 0, paused = false;
+let positions, grid;
+
+// Audio State
+let audioCtx, analyserL, analyserR, source, buffer;
+let earsActive = false;
+let audioBuffer = new Float32Array(FFT_SIZE * 2); // Stereo buffer
+let framePtr = 0;
+
+/* ================= Phase Grid (Augmented) ================ */
+class PhaseGrid {
+    constructor(size) {
+        this.size = size;
+        this.n = size*size*size;
+        this.plasma = new Float32Array(this.n);
+        this.liquid = new Float32Array(this.n);
+        this.solid  = new Float32Array(this.n);
+        this.parity = new Int8Array(this.n);
+
+        for (let i=0; i<this.n; i++) {
+            this.plasma[i] = Math.random()*0.5;
+            this.liquid[i] = Math.random()*0.5;
+            this.solid[i]  = Math.random()*0.5;
+        }
+    }
+
+    idx(x,y,z){
+        const s=this.size;
+        return x + y*s + z*s*s;
+    }
+
+    // Augmented perturb: Now accepts audio pokes
+    perturb(left_tuples = null, right_tuples = null) {
+        for (let i=0; i<this.n; i++){
+            if (Math.random() < FLIP_P) this.plasma[i] = 1 - this.plasma[i];
+            if (Math.random() < PARITY_P) this.parity[i] ^= 1;
+
+            // Audio injection: Map bins to grid indices (simple hash for now)
+            if (left_tuples && i % BIN_COUNT < BIN_COUNT) {
+                const bin = i % BIN_COUNT;
+                const ampL = left_tuples[bin] * AUDIO_GAIN;
+                this.plasma[i] += ampL * (i % this.size / this.size); // Bias low freq to X
+            }
+            if (right_tuples && i % BIN_COUNT < BIN_COUNT) {
+                const bin = i % BIN_COUNT;
+                const ampR = right_tuples[bin] * AUDIO_GAIN;
+                this.plasma[i] += ampR * ((this.size - i % this.size) / this.size); // Bias high to Y
+            }
+            this.plasma[i] = (this.plasma[i] % 1 + 1) % 1; // Wrap 0-1
+        }
+    }
+
+    neighborAvg(i){
+        const s=this.size;
+        const x=i%s, y=Math.floor(i/s)%s, z=Math.floor(i/(s*s));
+        let get=(a,b,c)=>this.plasma[this.idx((a+s)%s,(b+s)%s,(c+s)%s)];
+        return (
+            get(x+1,y,z)+get(x-1,y,z)+
+            get(x,y+1,z)+get(x,y-1,z)+
+            get(x,y,z+1)+get(x,y,z-1)
+        )/6;
+    }
+
+    step(){
+        const p0=new Float32Array(this.plasma);
+        const l0=new Float32Array(this.liquid);
+        const s0=new Float32Array(this.solid);
+
+        for (let i=0;i<this.n;i++){
+            const p=p0[i], l=l0[i], s=s0[i];
+            const avg = (p+l+s)/3;
+            const nb = Math.abs(p - this.neighborAvg(i)) + this.parity[i]*0.13;
+            const mix = (Math.random()<PATH_B_P)? nb : avg;
+
+            this.liquid[i] = mix;
+            this.solid[i]  = (s*(1-ALPHA) + mix*ALPHA) % 1;
+        }
+    }
+}
+
+/* ================ Audio Setup =============== */
+function setupAudio() {
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const sampleRate = audioCtx.sampleRate;
+        const nyquist = sampleRate / 2;
+
+        // Create stereo analysers (split if mono)
+        analyserL = audioCtx.createAnalyser();
+        analyserR = audioCtx.createAnalyser();
+        analyserL.fftSize = FFT_SIZE;
+        analyserR.fftSize = FFT_SIZE;
+        analyserL.smoothingTimeConstant = 0.8;
+        analyserR.smoothingTimeConstant = 0.8;
+
+        // Splitter for stereo
+        const splitter = audioCtx.createChannelSplitter(2);
+        splitter.connect(analyserL, 0); // Left
+        splitter.connect(analyserR, 1); // Right
+
+        // Get mic
+        navigator.mediaDevices.getUserMedia({ audio: { channelCount: 2 } })
+            .then(stream => {
+                source = audioCtx.createMediaStreamSource(stream);
+                source.connect(splitter);
+                earsActive = true;
+                document.getElementById("earsBtn").textContent = "Mute Ears";
+                loop(); // Restart loop to integrate audio
+            })
+            .catch(err => {
+                console.error("Mic access denied:", err);
+                alert("Audio access denied. Dreams stay silent.");
+            });
+    } else if (earsActive) {
+        // Mute
+        source.disconnect();
+        earsActive = false;
+        document.getElementById("earsBtn").textContent = "Start Ears";
+    } else {
+        // Resume (reconnect if needed)
+        // Placeholder: full restart for simplicity
+        location.reload();
+    }
+}
+
+function toggleEars() {
+    if (!audioCtx) setupAudio();
+    else if (earsActive) {
+        source.disconnect();
+        earsActive = false;
+        document.getElementById("earsBtn").textContent = "Start Ears";
+    } else {
+        // Reconnect logic here if stream cached
+        earsActive = true;
+        document.getElementById("earsBtn").textContent = "Mute Ears";
+    }
+}
+
+// Compute FFT tuples (amplitude spectra, log bins)
+function computeTuples(analyser) {
+    const buffer = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteFrequencyData(buffer);
+    const tuples = new Float32Array(BIN_COUNT);
+
+    // Log-scale bin mapping
+    const logMin = Math.log(MIN_FREQ);
+    const logMax = Math.log(Math.min(MAX_FREQ, audioCtx.sampleRate / 2));
+    for (let i = 0; i < BIN_COUNT; i++) {
+        const logFreq = logMin + (logMax - logMin) * (i / (BIN_COUNT - 1));
+        const freq = Math.exp(logFreq);
+        const bin = Math.floor((freq / (audioCtx.sampleRate / 2)) * (FFT_SIZE / 2));
+        tuples[i] = Math.max(0, buffer[bin] / 255); // Normalize 0-1
+    }
+    return tuples;
+}
+
+/* ================ Projection =============== */
+function projectPoints(pos, rotX, rotY, view) {
+    const [vx,vy,vw,vh] = view;
+    const out = [];
+    const len = pos.length/3;
+
+    const cX=Math.cos(rotX), sX=Math.sin(rotX);
+    const cY=Math.cos(rotY), sY=Math.sin(rotY);
+
+    const fov = Math.PI/4, f = 1/Math.tan(fov/2);
+    const aspect = vw/vh;
+    const camZ = 400;
+
+    for (let i=0,p=0; i<len; i++,p+=3){
+        let x=pos[p], y=pos[p+1], z=pos[p+2];
+
+        let rx = cY*x + sY*z;
+        let rz = -sY*x + cY*z;
+        let ry = cX*y - sX*rz;
+        let rz2= sX*y + cX*rz;
+
+        let cz = rz2 - camZ;
+        let ndcX = (f/aspect)*(rx/cz);
+        let ndcY = f*(ry/cz);
+
+        out.push({
+            i,
+            z: cz,
+            x: (ndcX*0.5+0.5)*vw + vx,
+            y: (ndcY*0.5+0.5)*vh + vy
+        });
+    }
+
+    out.sort((a,b)=>b.z-a.z);
+    return out;
+}
+
+/* ================ Rendering =============== */
+function colorize(list){
+    const p = grid.plasma, parity=grid.parity;
+
+    for (const pt of list){
+        const h = (time*0.1 + parity[pt.i] + p[pt.i]) % 1;
+        const t = h * 6.28318;
+        pt.r = Math.abs(Math.sin(t));
+        pt.g = Math.abs(Math.sin(t+2));
+        pt.b = Math.abs(Math.sin(t+4));
+        pt.a = 0.35 + 0.65*p[pt.i];
+        pt.plasma = p[pt.i];
+    }
+}
+
+function draw(){
+    ctx.fillStyle="#000";
+    ctx.fillRect(0,0,WIDTH,HEIGHT);
+
+    const pts = projectPoints(positions,rotX,rotY,[0,0,WIDTH,HEIGHT]);
+    colorize(pts);
+
+    for (const pt of pts){
+        if (!isFinite(pt.z)) continue;
+        if (pt.z>3000 || pt.z<-4000) continue;
+        if (pt.plasma < 0.02) continue;
+
+        const r = POINT_SIZE + 6*pt.plasma;
+        ctx.beginPath();
+        ctx.arc(pt.x,pt.y,r,0,Math.PI*2);
+        ctx.fillStyle = `rgba(${pt.r*255},${pt.g*255},${pt.b*255},${pt.a})`;
+        ctx.fill();
+    }
+
+    // Quick analyzer draw (left green, right purple)
+    if (earsActive) drawAnalyzer();
+}
+
+function drawAnalyzer() {
+    const anaCanvas = document.getElementById("analyzer");
+    const anaCtx = anaCanvas.getContext("2d");
+    anaCanvas.width = 200; anaCanvas.height = 100;
+    anaCtx.clearRect(0,0,200,100);
+
+    // Dummy bars for now—use real tuples if computed
+    for (let i=0; i<32; i++) {
+        const hL = Math.random() * 50; // Placeholder left
+        const hR = Math.random() * 50; // Placeholder right
+        anaCtx.fillStyle = `rgb(0,${hL*5},0)`;
+        anaCtx.fillRect(i*6, 100 - hL, 3, hL);
+        anaCtx.fillStyle = `rgb(${hR*5},0,${hR*5})`;
+        anaCtx.fillRect(i*6 + 100, 100 - hR, 3, hR);
+    }
+}
+
+/* ================ Loop (Audio-Integrated) =============== */
+function loop(){
+    if (!paused){
+        time += 1/FPS;
+
+        // Audio poke every hop
+        if (earsActive) {
+            const left_tuples = computeTuples(analyserL);
+            const right_tuples = computeTuples(analyserR);
+            grid.perturb(left_tuples, right_tuples);
+        } else {
+            grid.perturb();
+        }
+
+        grid.step();
+    }
+    draw();
+    requestAnimationFrame(loop);
+}
+
+/* ================ Utilities =============== */
+function saveSnapshot(){
+    const a=document.createElement("a");
+    a.download = `phasecube_ears_${Date.now()}.png`;
+    a.href = canvas.toDataURL();
+    a.click();
+}
+
+function togglePause(){
+    paused = !paused;
+    document.getElementById("pauseBtn").textContent = paused ? "Resume" : "Pause/Resume";
+}
+
+/* ================ Init =============== */
+function init(){
+    canvas=document.getElementById("canvas");
+    ctx=canvas.getContext("2d");
+    canvas.width=WIDTH;
+    canvas.height=HEIGHT;
+
+    const total = GRID*GRID*GRID;
+    positions = new Float32Array(total*3);
+    let ptr=0, half=(GRID-1)/2;
+
+    for (let x=0;x<GRID;x++)
+    for (let y=0;y<GRID;y++)
+    for (let z=0;z<GRID;z++){
+        positions[ptr++] = (x-half)*SCALE;
+        positions[ptr++] = (y-half)*SCALE;
+        positions[ptr++] = (z-half)*SCALE;
+    }
+
+    grid = new PhaseGrid(GRID);
+
+    canvas.addEventListener("mousemove", e=>{
+        rotX = (e.clientY/HEIGHT - 0.5)*Math.PI;
+        rotY = (e.clientX/WIDTH  - 0.5)*Math.PI*2;
+    });
+
+    document.onkeydown = e=>{
+        if (e.key.toLowerCase()==="s") saveSnapshot();
+    };
+
+    // Expose poke for external calls (e.g., from console)
+    window.poke_phase_cube = (left, right) => grid.perturb(left, right);
+
+    requestAnimationFrame(loop);
+}
+
+window.onload = init;
+</script>
+</body>
+</html>

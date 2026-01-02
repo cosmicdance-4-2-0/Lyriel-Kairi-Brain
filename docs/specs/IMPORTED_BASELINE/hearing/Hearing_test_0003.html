@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>PhaseCube — Hearing Test 0003 (Modular)</title>
+<style>
+  :root { --ctrl-bg: rgba(10,10,10,0.85); --accent: #7fe07f; }
+  html,body { height:100%; margin:0; background:#000; font-family:monospace; color:#fff; overflow:hidden; }
+  /* Canvas as visual background */
+  #cubeCanvas {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100vw; height: 100vh;
+    z-index: 0;
+    display:block;
+  }
+  /* Overlays & controls above canvas */
+  #overlay {
+    position: fixed; top: 10px; left: 10px;
+    z-index: 40;
+    background: var(--ctrl-bg); padding:8px 10px; border-radius:6px;
+    max-width: calc(100vw - 120px); pointer-events:none; white-space:pre-wrap; font-size:13px;
+  }
+  #controls {
+    position: fixed; right: 10px; bottom: 10px;
+    z-index: 50;
+    background: var(--ctrl-bg); padding:8px; border-radius:8px;
+    display:flex; flex-direction:column; gap:8px; align-items:flex-end;
+  }
+  .ctrl-row { display:flex; gap:8px; align-items:center; }
+  button, .slider {
+    background:#111; color:var(--accent); border:1px solid #333; padding:6px 10px; border-radius:6px; cursor:pointer;
+  }
+  .small { padding:4px 6px; font-size:12px; }
+  label { font-size:12px; color:#ccc; margin-right:6px; pointer-events:auto; }
+  input[type=range] { width:160px; }
+  #vizContainer {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    height: 18vh; z-index: 10; background: rgba(0,0,0,0.7); display:flex; align-items:center; justify-content:center;
+    border-top:1px solid #222;
+  }
+  #vizCanvas { width: 92%; height: 84%; border-radius:6px; background:#050508; }
+  /* Mobile safe adjustments */
+  @media (max-width:600px) {
+    #controls { right:8px; bottom:8px; left:8px; flex-direction:row; flex-wrap:wrap; justify-content:center; }
+    input[type=range] { width:120px; }
+  }
+</style>
+</head>
+<body>
+
+<canvas id="cubeCanvas"></canvas>
+
+<div id="overlay">PhaseCube — Hearing Test 0003
+Move/click to rotate. S: save PNG. P: pause. Toggle ears to grant mic.
+Bias from ears nudges branch-probability (path B).</div>
+
+<div id="controls"></div>
+
+<!-- Visualizer is intentionally lower z-index so it doesn't hide controls -->
+<div id="vizContainer" style="display:none;">
+  <canvas id="vizCanvas"></canvas>
+</div>
+
+<script>
+/* =================== Config =================== */
+const Config = {
+  GRID: 16,
+  SCALE: 24,
+  FPS: 60,
+  POINT_SIZE: 3,
+  FLIP_P: 0.02,
+  PARITY_P: 0.01,
+  BASE_PATH_B_P: 0.65, // can be adjusted by UI
+  ALPHA: 0.18,
+  BIN_COUNT: 64,
+  FFT_SIZE: 2048
+};
+
+/* =================== Global State =================== */
+const State = {
+  canvas: null, ctx: null,
+  vizCanvas: null, vctx: null,
+  rotX: Math.PI/6, rotY: Math.PI/4,
+  time: 0, paused: false,
+  positions: null,
+  grid: null, inputLayer: null,
+  audioCtx: null, analyserL: null, analyserR: null, sourceNode: null, earsActive: false,
+  ui: null
+};
+
+/* =================== InputLayer =================== */
+class InputLayer {
+  constructor(gridSize, binCount, sampleRate=44100) {
+    this.gridSize = gridSize;
+    this.n = gridSize*gridSize*gridSize;
+    this.binCount = binCount;
+    this.sampleRate = sampleRate;
+    this.minFreq = 20;
+    this.maxFreq = Math.min(20000, this.sampleRate/2);
+    this.biasField = new Float32Array(this.n);
+    this.decay = 0.94;
+    this.strength = 0.18;
+    this.kernelRadius = Math.max(1, Math.floor(gridSize / 6));
+  }
+
+  setParams({decay, strength, kernelRadius}) {
+    if (decay !== undefined) this.decay = decay;
+    if (strength !== undefined) this.strength = strength;
+    if (kernelRadius !== undefined) this.kernelRadius = Math.max(1, Math.floor(kernelRadius));
+  }
+
+  binToZ(binIdx) {
+    const t = binIdx / (this.binCount - 1);
+    return Math.floor(t * (this.gridSize - 1));
+  }
+
+  injectBinStereo(binIdx, ampL, ampR) {
+    const zCenter = this.binToZ(binIdx);
+    const energy = (ampL + ampR) * 0.5;
+    const pan = (ampR - ampL) * (this.gridSize * 0.16);
+    let xCenter = Math.floor(energy * (this.gridSize - 1) + pan);
+    xCenter = Math.max(0, Math.min(this.gridSize-1, xCenter));
+    const yCenter = Math.floor((this.gridSize - 1)/2);
+    const str = this.strength;
+    const r = this.kernelRadius;
+
+    const xMin = Math.max(0, xCenter - r), xMax = Math.min(this.gridSize-1, xCenter + r);
+    const yMin = Math.max(0, yCenter - r), yMax = Math.min(this.gridSize-1, yCenter + r);
+    const zMin = Math.max(0, zCenter - r), zMax = Math.min(this.gridSize-1, zCenter + r);
+
+    for (let x = xMin; x <= xMax; x++){
+      for (let y = yMin; y <= yMax; y++){
+        for (let z = zMin; z <= zMax; z++){
+          const dx = (x - xCenter)/r;
+          const dy = (y - yCenter)/r;
+          const dz = (z - zCenter)/r;
+          const dist2 = dx*dx + dy*dy + dz*dz;
+          const kernel = Math.exp(-dist2 * 2.4);
+          const delta = energy * str * kernel;
+          const idx = x + y*this.gridSize + z*this.gridSize*this.gridSize;
+          this.biasField[idx] += delta;
+        }
+      }
+    }
+  }
+
+  ingestTuples(left, right) {
+    // decay
+    for (let i=0;i<this.n;i++) this.biasField[i] *= this.decay;
+
+    // inject
+    for (let b=0;b<this.binCount;b++){
+      const aL = left[b] || 0;
+      const aR = right[b] || 0;
+      // slight emphasis on higher bins for perceptual punch, tweakable
+      const freqT = b/(this.binCount-1);
+      const emphasis = 0.55 + 0.9 * Math.pow(freqT, 1.05);
+      this.injectBinStereo(b, aL*emphasis, aR*emphasis);
+    }
+
+    // clamp to reasonable band
+    for (let i=0;i<this.n;i++){
+      if (this.biasField[i] > 0.38) this.biasField[i] = 0.38;
+      if (this.biasField[i] < -0.38) this.biasField[i] = -0.38;
+    }
+  }
+
+  getBiasField() { return this.biasField; }
+}
+
+/* =================== PhaseGrid =================== */
+class PhaseGrid {
+  constructor(size) {
+    this.size = size;
+    this.n = size*size*size;
+    this.plasma = new Float32Array(this.n);
+    this.liquid = new Float32Array(this.n);
+    this.solid  = new Float32Array(this.n);
+    this.parity = new Int8Array(this.n);
+
+    for (let i=0;i<this.n;i++){
+      this.plasma[i] = Math.random()*0.5;
+      this.liquid[i] = Math.random()*0.5;
+      this.solid[i] = Math.random()*0.5;
+      this.parity[i] = (Math.random()<0.5)?1:0;
+    }
+  }
+
+  idx(x,y,z){ const s=this.size; return x + y*s + z*s*s; }
+
+  neighborAvg(i){
+    const s=this.size;
+    const x=i%s, y=Math.floor(i/s)%s, z=Math.floor(i/(s*s));
+    const get=(a,b,c)=>this.plasma[this.idx((a+s)%s,(b+s)%s,(c+s)%s)];
+    return (get(x+1,y,z)+get(x-1,y,z)+get(x,y+1,z)+get(x,y-1,z)+get(x,y,z+1)+get(x,y,z-1))/6;
+  }
+
+  perturb(sensoryBiasField=null) {
+    for (let i=0;i<this.n;i++){
+      if (Math.random() < Config.FLIP_P) this.plasma[i] = 1 - this.plasma[i];
+      if (Math.random() < Config.PARITY_P) this.parity[i] ^= 1;
+
+      const jitterScale = sensoryBiasField ? 0.01 * (1 + sensoryBiasField[i]) : 0.01;
+      this.liquid[i] += (this.parity[i] ? jitterScale : -jitterScale) * (Math.random()*0.5 + 0.5);
+      this.liquid[i] = (this.liquid[i] % 1 + 1) % 1;
+    }
+
+    if (sensoryBiasField){
+      for (let i=0;i<this.n;i++){
+        this.plasma[i] += sensoryBiasField[i] * 0.02;
+        this.plasma[i] = (this.plasma[i] % 1 + 1) % 1;
+      }
+    }
+  }
+
+  step(sensoryBiasField=null) {
+    const p0 = new Float32Array(this.plasma);
+    const l0 = new Float32Array(this.liquid);
+    const s0 = new Float32Array(this.solid);
+    const outL = new Float32Array(this.n);
+    const outS = new Float32Array(this.n);
+
+    for (let i=0;i<this.n;i++){
+      const p = p0[i], l = l0[i], s = s0[i];
+      const avg = (p + l + s)/3;
+      const nb = Math.abs(p - this.neighborAvg(i)) + this.parity[i]*0.13;
+
+      let probB = Config.BASE_PATH_B_P + (sensoryBiasField ? sensoryBiasField[i] : 0);
+      probB = Math.max(0.05, Math.min(0.95, probB));
+
+      const choice = (Math.random() < probB) ? nb : avg;
+      outL[i] = choice;
+      outS[i] = (s*(1-Config.ALPHA) + choice*Config.ALPHA) % 1;
+    }
+
+    this.liquid = outL;
+    this.solid = outS;
+  }
+}
+
+/* =================== Projection & Rendering =================== */
+const Projection = {
+  projectPoints(pos, rotX, rotY, view){
+    const [vx,vy,vw,vh] = view;
+    const out = [];
+    const len = pos.length/3;
+    const cX=Math.cos(rotX), sX=Math.sin(rotX);
+    const cY=Math.cos(rotY), sY=Math.sin(rotY);
+    const fov = Math.PI/4, f = 1/Math.tan(fov/2);
+    const aspect = vw/vh;
+    const camZ = 400;
+
+    for (let i=0,p=0; i<len; i++,p+=3){
+      let x=pos[p], y=pos[p+1], z=pos[p+2];
+      let rx = cY*x + sY*z;
+      let rz = -sY*x + cY*z;
+      let ry = cX*y - sX*rz;
+      let rz2 = sX*y + cX*rz;
+      let cz = rz2 - camZ;
+      if (!isFinite(cz) || Math.abs(cz) < 0.0001) cz = cz < 0 ? -0.0001 : 0.0001;
+      const ndcX = (f/aspect)*(rx/cz);
+      const ndcY = f*(ry/cz);
+      out.push({ i, z: cz, x: (ndcX*0.5+0.5)*vw + vx, y: (ndcY*0.5+0.5)*vh + vy });
+    }
+    out.sort((a,b)=>b.z-a.z);
+    return out;
+  }
+};
+
+const Rendering = {
+  colorize(list, grid, time){
+    const p = grid.plasma, parity = grid.parity, l = grid.liquid;
+    for (const pt of list){
+      const h = (time*0.08 + parity[pt.i] + p[pt.i]) % 1;
+      const t = h * Math.PI * 2;
+      pt.r = Math.abs(Math.sin(t));
+      pt.g = Math.abs(Math.sin(t+2));
+      pt.b = Math.abs(Math.sin(t+4));
+      pt.a = 0.25 + 0.7 * l[pt.i];
+      pt.plasma = p[pt.i];
+      pt.liquid = l[pt.i];
+    }
+  },
+
+  draw(ctx, positions, rotX, rotY, grid, time, width, height){
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0,0,width,height);
+    const pts = Projection.projectPoints(positions, rotX, rotY, [0,0,width,height]);
+    Rendering.colorize(pts, grid, time);
+    for (const pt of pts){
+      if (!isFinite(pt.z)) continue;
+      if (pt.z > 3000 || pt.z < -4000) continue;
+      if (pt.liquid < 0.02) continue;
+      const r = Config.POINT_SIZE + 6 * pt.plasma;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, r, 0, Math.PI*2);
+      const R = Math.round(pt.r * 255), G = Math.round(pt.g * 255), B = Math.round(pt.b * 255);
+      ctx.fillStyle = `rgba(${R},${G},${B},${pt.a.toFixed(3)})`;
+      ctx.fill();
+    }
+  }
+};
+
+/* =================== Audio Helpers =================== */
+const AudioHelpers = {
+  async setupStereo() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error("No getUserMedia");
+    }
+    if (!State.audioCtx) {
+      State.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      State.analyserL = State.audioCtx.createAnalyser();
+      State.analyserR = State.audioCtx.createAnalyser();
+      State.analyserL.fftSize = Config.FFT_SIZE;
+      State.analyserR.fftSize = Config.FFT_SIZE;
+      State.analyserL.smoothingTimeConstant = 0.85;
+      State.analyserR.smoothingTimeConstant = 0.85;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 2 }});
+      State.sourceNode = State.audioCtx.createMediaStreamSource(stream);
+      const splitter = State.audioCtx.createChannelSplitter(2);
+      State.sourceNode.connect(splitter);
+      splitter.connect(State.analyserL, 0);
+      splitter.connect(State.analyserR, 1);
+      State.earsActive = true;
+      // patch inputLayer sample rate if needed
+      if (State.inputLayer) State.inputLayer.sampleRate = State.audioCtx.sampleRate;
+      return true;
+    } catch (err) {
+      // fallback to mono: connect the single stream to both analysers
+      try {
+        const stream2 = await navigator.mediaDevices.getUserMedia({ audio: true });
+        State.sourceNode = State.audioCtx.createMediaStreamSource(stream2);
+        State.sourceNode.connect(State.analyserL);
+        State.sourceNode.connect(State.analyserR);
+        State.earsActive = true;
+        if (State.inputLayer) State.inputLayer.sampleRate = State.audioCtx.sampleRate;
+        return true;
+      } catch (err2) {
+        console.error("Audio denied or failed", err2);
+        throw err2;
+      }
+    }
+  },
+
+  computeTuples(analyser) {
+    if (!analyser || !State.audioCtx) return new Float32Array(Config.BIN_COUNT);
+    const freqData = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteFrequencyData(freqData);
+    const tuples = new Float32Array(Config.BIN_COUNT);
+    const sr = State.audioCtx.sampleRate;
+    const logMin = Math.log(20);
+    const logMax = Math.log(Math.min(sr/2, 20000));
+    const binsAvail = analyser.frequencyBinCount;
+    for (let i=0;i<Config.BIN_COUNT;i++){
+      const t = i/(Config.BIN_COUNT-1);
+      const f = Math.exp(logMin + (logMax - logMin) * t);
+      const bin = Math.floor((f / (sr/2)) * binsAvail);
+      const v = freqData[Math.max(0, Math.min(binsAvail-1, bin))] / 255;
+      tuples[i] = Math.min(1, Math.max(0, v));
+    }
+    return tuples;
+  }
+};
+
+/* =================== UI Manager =================== */
+class UIManager {
+  constructor(containerId) {
+    this.root = document.getElementById(containerId);
+    this.vizContainer = document.getElementById('vizContainer');
+    this.vizCanvas = document.getElementById('vizCanvas');
+    this.pauseBtn = null; this.earsBtn = null; this.analyzerToggle = null;
+    this.sliders = {};
+    this.init();
+  }
+
+  init() {
+    // clear
+    this.root.innerHTML = '';
+
+    // Row: buttons
+    const row1 = document.createElement('div'); row1.className = 'ctrl-row';
+    this.pauseBtn = this._btn('Pause', () => this.togglePause());
+    this.earsBtn  = this._btn('Start Ears', () => this.toggleEars());
+    this.analyzerToggle = this._btn('Show Analyzer', () => this.toggleAnalyzer());
+    row1.appendChild(this.pauseBtn); row1.appendChild(this.earsBtn); row1.appendChild(this.analyzerToggle);
+    this.root.appendChild(row1);
+
+    // Row: save
+    const row2 = document.createElement('div'); row2.className = 'ctrl-row';
+    row2.appendChild(this._btn('Save PNG', ()=>this.save() ));
+    this.root.appendChild(row2);
+
+    // Row: sliders (tweakable params)
+    const sliderNames = [
+      {key:'baseProb', label:'Base p(B)', min:0.05, max:0.95, step:0.01, value:Config.BASE_PATH_B_P},
+      {key:'strength', label:'Kernel Str', min:0.01, max:0.6, step:0.01, value:0.18},
+      {key:'decay', label:'Bias Decay', min:0.85, max:0.995, step:0.005, value:0.94},
+      {key:'kernel', label:'Kernel R', min:1, max:6, step:1, value:Math.max(1, Math.floor(Config.GRID/6))}
+    ];
+    sliderNames.forEach(s => {
+      const row = document.createElement('div'); row.className = 'ctrl-row';
+      const lbl = document.createElement('label'); lbl.textContent = s.label;
+      const input = document.createElement('input'); input.type='range';
+      input.min = s.min; input.max = s.max; input.step = s.step; input.value = s.value;
+      const val = document.createElement('span'); val.style.color='#ccc'; val.style.marginLeft='6px';
+      val.textContent = s.value;
+      input.oninput = ()=> {
+        val.textContent = input.value;
+        this.onSliderChange(s.key, parseFloat(input.value));
+      };
+      row.appendChild(lbl); row.appendChild(input); row.appendChild(val);
+      this.root.appendChild(row);
+      this.sliders[s.key] = input;
+    });
+
+    // attach viz canvas contexts
+    State.vizCanvas = this.vizCanvas;
+    State.vctx = this.vizCanvas.getContext('2d');
+
+    // default hidden viz
+    this.vizContainer.style.display = 'none';
+  }
+
+  _btn(text, cb) {
+    const b = document.createElement('button'); b.textContent = text; b.className='small';
+    b.onclick = cb; return b;
+  }
+
+  togglePause() {
+    State.paused = !State.paused;
+    this.pauseBtn.textContent = State.paused ? 'Resume' : 'Pause';
+  }
+
+  async toggleEars() {
+    if (!State.audioCtx || !State.earsActive) {
+      try {
+        await AudioHelpers.setupStereo();
+        State.inputLayer.sampleRate = State.audioCtx.sampleRate;
+        State.earsActive = true;
+        this.earsBtn.textContent = 'Mute Ears';
+        this.vizContainer.style.display = 'flex';
+      } catch (err) {
+        alert('Audio access denied or unavailable.');
+      }
+    } else {
+      // disconnect and mute
+      try { State.sourceNode.disconnect(); } catch(e) {}
+      State.earsActive = false;
+      this.earsBtn.textContent = 'Start Ears';
+      this.vizContainer.style.display = 'none';
+    }
+  }
+
+  toggleAnalyzer() {
+    if (this.vizContainer.style.display === 'none') {
+      this.vizContainer.style.display = 'flex';
+      this.analyzerToggle.textContent = 'Hide Analyzer';
+    } else {
+      this.vizContainer.style.display = 'none';
+      this.analyzerToggle.textContent = 'Show Analyzer';
+    }
+  }
+
+  save() {
+    const a = document.createElement('a');
+    a.download = `phasecube_0003_${Date.now()}.png`;
+    a.href = State.canvas.toDataURL();
+    a.click();
+  }
+
+  onSliderChange(key, val) {
+    if (key === 'baseProb') Config.BASE_PATH_B_P = val;
+    if (key === 'strength') { State.inputLayer.strength = val; }
+    if (key === 'decay') { State.inputLayer.decay = val; }
+    if (key === 'kernel') { State.inputLayer.kernelRadius = Math.floor(val); }
+  }
+
+  drawAnalyzer() {
+    if (!State.earsActive || !State.analyserL || !State.analyserR) return;
+    const actx = State.vctx;
+    const c = this.vizCanvas;
+    c.width = Math.floor(c.clientWidth * devicePixelRatio);
+    c.height = Math.floor(c.clientHeight * devicePixelRatio);
+    const w = c.width, h = c.height;
+    actx.clearRect(0,0,w,h);
+    actx.fillStyle = '#000'; actx.fillRect(0,0,w,h);
+
+    const left = AudioHelpers.computeTuples(State.analyserL);
+    const right = AudioHelpers.computeTuples(State.analyserR);
+    const bins = Math.min(left.length, 64);
+    const half = Math.floor(w/2);
+    const barW = Math.max(1, Math.floor(half / bins));
+    for (let i=0;i<bins;i++){
+      const lx = i * barW;
+      const rx = half + i * barW;
+      const hL = Math.floor(left[i] * (h - 10));
+      const hR = Math.floor(right[i] * (h - 10));
+      actx.fillStyle = `rgb(0,${Math.floor(220*hL/(h-10)+30)},0)`;
+      actx.fillRect(lx, h - 5 - hL, barW-1, hL);
+      actx.fillStyle = `rgb(${Math.floor(220*hR/(h-10)+30)},0,${Math.floor(220*hR/(h-10)+30)})`;
+      actx.fillRect(rx, h - 5 - hR, barW-1, hR);
+    }
+    actx.fillStyle = '#aaa'; actx.font = `${12*devicePixelRatio}px monospace`;
+    actx.fillText('Left (green) — Right (magenta)', 10*devicePixelRatio, 14*devicePixelRatio);
+  }
+}
+
+/* =================== Loop =================== */
+function loop() {
+  requestAnimationFrame(loop);
+  if (!State.canvas) return;
+  if (!State.paused) {
+    State.time += 1/Config.FPS;
+    let biasField = null;
+    if (State.earsActive && State.analyserL && State.analyserR && State.inputLayer) {
+      const left = AudioHelpers.computeTuples(State.analyserL);
+      const right = AudioHelpers.computeTuples(State.analyserR);
+      State.inputLayer.ingestTuples(left, right);
+      biasField = State.inputLayer.getBiasField();
+    }
+    State.grid.perturb(biasField);
+    State.grid.step(biasField);
+  }
+  Rendering.draw(State.ctx, State.positions, State.rotX, State.rotY, State.grid, State.time, State.canvas.width, State.canvas.height);
+  // overlay text
+  const overlay = document.getElementById('overlay');
+  const biasPreview = State.inputLayer ? (State.inputLayer.biasField ? State.inputLayer.biasField[0].toFixed(3) : '---') : '---';
+  overlay.textContent = `PhaseCube — Hearing Test 0003
+GRID ${Config.GRID} | Base p(B) ${Config.BASE_PATH_B_P.toFixed(2)} | Ears ${State.earsActive ? 'ON' : 'OFF'}
+Use sliders to tweak kernel strength / decay / base prob.`;
+  // UI analyzer draw
+  if (State.ui) State.ui.drawAnalyzer();
+}
+
+/* =================== Init =================== */
+function init() {
+  // Canvas
+  State.canvas = document.getElementById('cubeCanvas');
+  State.ctx = State.canvas.getContext('2d');
+  const DPR = window.devicePixelRatio || 1;
+  function resizeCanvas(){
+    State.canvas.width = Math.floor(window.innerWidth * DPR);
+    State.canvas.height = Math.floor(window.innerHeight * DPR);
+    State.canvas.style.width = `${window.innerWidth}px`;
+    State.canvas.style.height = `${window.innerHeight}px`;
+    State.ctx.setTransform(DPR,0,0,DPR,0,0);
+    // viz canvas styling left to UIManager
+  }
+  window.addEventListener('resize', resizeCanvas);
+  resizeCanvas();
+
+  // positions
+  const total = Config.GRID * Config.GRID * Config.GRID;
+  State.positions = new Float32Array(total*3);
+  let ptr = 0, half = (Config.GRID - 1) / 2;
+  for (let x=0;x<Config.GRID;x++) for (let y=0;y<Config.GRID;y++) for (let z=0;z<Config.GRID;z++){
+    State.positions[ptr++] = (x-half) * Config.SCALE;
+    State.positions[ptr++] = (y-half) * Config.SCALE;
+    State.positions[ptr++] = (z-half) * Config.SCALE;
+  }
+
+  State.grid = new PhaseGrid(Config.GRID);
+  State.inputLayer = new InputLayer(Config.GRID, Config.BIN_COUNT);
+
+  // UI manager
+  State.ui = new UIManager('controls');
+
+  // bind input events
+  State.canvas.addEventListener('mousemove', e=>{
+    const rect = State.canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    State.rotX = (my / rect.height - 0.5) * Math.PI;
+    State.rotY = (mx / rect.width - 0.5) * Math.PI * 2;
+  });
+  State.canvas.addEventListener('touchmove', e=>{
+    if (!e.touches || e.touches.length===0) return;
+    const t0 = e.touches[0];
+    const rect = State.canvas.getBoundingClientRect();
+    const mx = t0.clientX - rect.left;
+    const my = t0.clientY - rect.top;
+    State.rotX = (my / rect.height - 0.5) * Math.PI;
+    State.rotY = (mx / rect.width - 0.5) * Math.PI * 2;
+  }, {passive:true});
+
+  // keyboard
+  document.addEventListener('keydown', e=>{
+    if (e.key.toLowerCase()==='s') {
+      const a = document.createElement('a');
+      a.download = `phasecube_0003_${Date.now()}.png`;
+      a.href = State.canvas.toDataURL();
+      a.click();
+    }
+    if (e.key.toLowerCase()==='p') {
+      State.paused = !State.paused;
+      if (State.ui) State.ui.pauseBtn.textContent = State.paused ? 'Resume' : 'Pause';
+    }
+  });
+
+  // viz canvas pointer events off (so controls remain tappable)
+  const viz = document.getElementById('vizCanvas');
+  viz.style.pointerEvents = 'none';
+
+  // start loop
+  loop();
+}
+
+// Kick off
+window.addEventListener('load', init);
+
+</script>
+</body>
+</html>
