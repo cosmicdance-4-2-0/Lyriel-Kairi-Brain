@@ -1,0 +1,9 @@
+{
+  "name": "lyriel-kairi-brain",
+  "version": "0.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node tests/phasecube.test.js"
+  }
+}
