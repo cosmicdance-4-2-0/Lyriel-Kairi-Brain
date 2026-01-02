@@ -1,301 +1,244 @@
-# PhaseCube — The Lyriel Kairi Brain  
-### A Minimal, Audio-Driven Swarm Mind (Alpha)
+# HEARING_BASELINE — PhaseCube Audio Influence Layer (v0.1)
 
-**Author:** Christopher “Kisuul” Lohman  
-**Release:** December 25, 2025  
-**License:** TBD (MIT / Apache-2.0 recommended)  
-**Status:** Minimal Proof-of-Concept
-
-> *“Not everything with a mind is smart.  
-> Not everything that thinks needs a goal.”*
+**Status:** Baseline Definition  
+**Audience:** Developers and researchers implementing or extending a minimal, continuously-active, influenceable swarm substrate with an audio input channel.  
+**Scope:** Defines the canonical **Hearing** baseline for PhaseCube: a minimal audio→features→bias→coupling pipeline that **influences** (does not control) Dreaming dynamics.
 
 ---
 
-## Overview
+## 1. Purpose
 
-**PhaseCube** is a single-file, browser-native simulation of a **minimal agentive system**:  
-a continuously active, internally driven swarm that can be *influenced* by external input without being *controlled* by it.
+This document formalizes the **Hearing baseline**: the smallest stable “ears” module that can be attached to the **Dreaming baseline** without changing its core behavior model.
 
-It is best understood as a **dreaming brain**.
+The Hearing baseline is designed to:
 
-- Not intelligent  
-- Not trained  
-- Not goal-directed  
-- Not convergent  
-
-Yet:
-- Stateful  
-- Autonomous  
-- Persistent  
-- Responsive  
-
-PhaseCube sits deliberately *below* modern AI systems, exploring a simpler and more biologically honest design space: **pre-symbolic, pre-teleological cognition**.
+- Add **audio-sensing** as *influence*, not command.
+- Preserve the Dreaming substrate’s **bounded, non-collapsing** nature.
+- Provide a **conformance target** so ports and rewrites can be compared.
+- Define clean **extension seams** for future work (alternate mappings, smoothing, output channels).
 
 ---
 
-## What This Is
+## 2. Baseline Definition
 
-PhaseCube is:
+### 2.1 What “Hearing” Means Here
 
-- A **ternary-phase swarm lattice** (plasma / liquid / solid)
-- A **bounded, non-collapsing dynamical system**
-- An **audio-modulated bias field experiment**
-- A **living visualization of internal state**
-- A **minimal substrate for agentive behavior**
-- A **playground for LLM-assisted iteration**
-- A **pedagogical artifact**
+“Hearing” is a strictly limited interface:
 
-You can think of it as:
-- a jellyfish brain  
-- a slime-mold-like mind  
-- a dreaming, breathing field  
+1. Capture audio (mic or injected source)
+2. Convert audio into a compact feature vector
+3. Convert features into a **decaying bias field** over the grid
+4. Use that bias field to modulate **one** substrate coupling path:
+   - **Branch probability modulation** (p(B) bias)
 
-All are valid metaphors. None are complete.
+That’s it.
 
----
+### 2.2 Minimal Coupling Rule (Canonical)
 
-## What This Is Not
+The Hearing baseline **MUST** only influence Dreaming by adjusting the local probability of selecting Path B:
 
-PhaseCube is **not**:
+Let:
 
-- Artificial General Intelligence (AGI)
-- Artificial Narrow Intelligence (ANI)
-- A neural network
-- A transformer
-- A classifier
-- A planner
-- A reinforcement learner
-- A system that “understands” symbols
-- A system that produces useful work outputs (yet)
+- `pB_base` = baseline `BASE_PATH_B_P`
+- `bias[i]` = bias field value at cell `i` (bounded)
+- `pB[i]` = local branch probability at cell `i`
 
-It does **not** reason, plan, optimize, or pursue goals.
+Then:
 
-Calling it “smart” would be incorrect.  
-Calling it a **mind** is intentional.
+- `pB[i] = clamp(pB_base + bias[i], pB_min, pB_max)`
+
+**Baseline constraints:**
+- `pB_min` and `pB_max` are chosen to prevent collapse or freezing; defaults:
+  - `pB_min = 0.05`
+  - `pB_max = 0.95`
+- `bias[i]` MUST be bounded (see §4.4).
+
+**Non-baseline note:** Any additional coupling (bias→plasma changes, bias→jitter scaling, bias→solid direct writes, etc.) is **not baseline** and belongs in a delta.
 
 ---
 
-## Design Philosophy
+## 3. Non-Goals
 
-### 1. Bottom-Up, Not Top-Down
+The Hearing baseline does **not** attempt to provide:
 
-No goals.  
-No loss functions.  
-No reward gradients.  
-
-Behavior emerges from:
-- local interactions
-- probabilistic transitions
-- bounded memory
-- continuous dissipation
+- Semantic understanding of audio
+- Classification, transcription, or symbolic decoding
+- Long-term memory of audio events
+- Output generation, decision making, or goal pursuit
+- Multi-modal fusion (vision/text/etc.)
+- “Nice” UX polish (UI is a prototype concern)
 
 ---
 
-### 2. Non-Collapse as a First-Class Constraint
+## 4. System Model
 
-The system is explicitly designed to avoid:
+### 4.1 Components
 
-- fixed-point convergence
-- runaway excitation
-- attractor lock-in
-- singularity-style behavior
+The Hearing baseline consists of four conceptual components:
 
-This is achieved via:
-- stochastic phase flips
-- parity asymmetry
-- decay and forgetting
-- probabilistic path selection
+1. **AudioCapture**
+   - Provides audio frames from a microphone or injected source.
 
----
+2. **FeatureExtractor**
+   - Converts audio into a compact vector of `BIN_COUNT` magnitudes.
+   - Uses an FFT analyser with log-frequency sampling.
 
-### 3. Input as Influence, Not Command
+3. **BiasField**
+   - Maintains a grid-sized float field that:
+     - decays over time,
+     - receives new energy injections from features,
+     - clamps to safe bounds.
 
-Audio input:
-- biases probabilities
-- injects energy
-- never overwrites state
+4. **Coupler**
+   - Applies `bias[i]` only to `pB[i]` (Path B probability).
 
-The system can be *sung to*, not *told what to do*.
+### 4.2 Feature Vector (Canonical)
 
----
+**Feature shape:**  
+A 1D vector of length `BIN_COUNT` per channel:
+- `left[b]` in `[0,1]`
+- `right[b]` in `[0,1]`
 
-### 4. Radical Minimalism
+**Canonical sampling:**
+- Use log-spaced frequencies from ~20 Hz to Nyquist (clamped to ~20 kHz max).
+- Sample the analyser bins at those frequencies.
+- Normalize to `[0,1]`.
 
-This project is intentionally:
+This maintains stability across sample rates and devices.
 
-- single-file
-- dependency-free
-- inspectable
-- hackable
-- remixable
+### 4.3 Bias Field Semantics (Canonical Mapping)
 
-If a “vibe-coding kid with an LLM” can’t understand it, the design has failed.
+Each frequency bin injects energy into a spatial kernel in the PhaseCube grid:
 
----
+- **Frequency (bin index)** → **Depth (Z)**
+  - Lower bins map deeper, higher bins map toward surface.
 
-## Core Architecture
+- **Stereo imbalance** → **Lateral displacement (X)**
+  - Right stronger than left shifts toward +X; left stronger shifts toward −X.
 
-### PhaseGrid (The Mind)
+- **Amplitude (energy)** → **Injection strength**
+  - Overall energy controls how much bias is injected.
 
-A 3D lattice of simple agents.  
-Each cell contains:
+**Baseline defaults (suggested):**
+- `zCenter = floor( (b / (BIN_COUNT-1)) * (GRID-1) )`
+- `energy = 0.5 * (left[b] + right[b])`
+- `pan = (right[b] - left[b]) * (GRID * 0.16)`
+- `xCenter = clamp( floor( (GRID-1)/2 + pan + energy * (GRID-1) * 0.3 ), 0, GRID-1 )`
+- `yCenter = floor( (GRID-1)/2 )`
 
-- **Plasma** — volatile phase
-- **Liquid** — active / visible phase
-- **Solid** — slow memory accumulator
-- **Parity** — binary asymmetry bit
+**Note:** These constants are baseline defaults, not sacred numbers. The semantics are the baseline: **freq→Z**, **pan→X**, **amp→strength**.
 
-Cells update via:
-- neighbor comparison
-- probabilistic path selection
-- slow memory integration
-- continuous bounded noise (“dreaming”)
+### 4.4 Bias Field Update Rule (Canonical)
 
----
+Bias is a decaying field with bounded injections:
 
-### InputLayer (The Senses)
+Per frame:
 
-Audio is converted into a **temporary bias field**:
+1. **Decay**
+   - `bias[i] *= decay`
 
-- Low frequencies → depth (Z)
-- Stereo pan → lateral displacement (X)
-- Amplitude → excitation strength
+2. **Inject**
+   - For each bin `b`, inject `energy * strength * kernel(distance)` into nearby cells.
+   - Kernel is radial and local (e.g., gaussian-like).
 
-Bias:
-- diffuses radially
-- decays over time
-- never becomes permanent memory
+3. **Clamp**
+   - `bias[i] = clamp(bias[i], biasMin, biasMax)`
 
----
+**Baseline suggested parameters:**
+- `decay ≈ 0.94`
+- `strength ≈ 0.18`
+- `kernelRadius ≈ max(1, floor(GRID/6))`
+- `biasMin = -0.38`
+- `biasMax = +0.38`
 
-### Renderer (Introspection)
-
-Visualization is a **projection of internal state**, not a separate simulation.
-
-- Color → phase + parity
-- Alpha / size → liquid activity
-- Motion → internal evolution, not animation tricks
-
-This is phenomenology, not instrumentation.
+**Kernel guidance:**
+- Gaussian-ish kernel is recommended for smoothness:
+  - `kernel = exp(-dist2 * 2.4)` where `dist2` is normalized by `radius^2`.
 
 ---
 
-## Interaction Modes
+## 5. Conformance Requirements
 
-- **Live Mic** — speak or play music into it
-- **Synth** — controlled oscillators / noise
-- **Audio File** — looped playback
+An implementation conforms to **HEARING_BASELINE v0.1** if it satisfies:
 
-Controls:
-- Mouse drag → rotate
-- `P` → pause
-- `S` → save snapshot
-- Analyzer → frequency introspection
+### 5.1 Pipeline
+- Captures audio (mic or injected source).
+- Computes `left[]` and `right[]` feature vectors of length `BIN_COUNT`.
+- Produces a grid-sized bias field with:
+  - decay,
+  - injection,
+  - clamp.
 
----
+### 5.2 Coupling
+- The bias field influences Dreaming **only** via `pB[i]` modulation.
+- No other state variables are directly modified by hearing input in baseline mode.
 
-## Why Call This a “Mind”?
+### 5.3 Boundedness
+- Bias values are clamped to safe limits.
+- `pB[i]` is clamped to safe limits.
 
-Because it satisfies a minimal, defensible definition:
-
-> A system with internal state, autonomous evolution, bounded responsiveness, and persistence across time.
-
-A jellyfish is not intelligent.  
-A jellyfish still has a mind.
-
-PhaseCube explores that same tier of cognition — *before* intelligence, *before* language, *before* goals.
-
----
-
-## Missing Features (By Design)
-
-This prototype intentionally lacks:
-
-### ❌ Persistent Long-Term Memory
-Because early minds forget constantly.
-
-### ❌ Output Channels
-Because cognition precedes communication.
-
-### ❌ Goals or Rewards
-Because teleology collapses exploratory dynamics.
-
-These are **design constraints**, not technical limitations.
-
-They can be added later — modularly, experimentally, responsibly.
+### 5.4 Deterministic Surface Area
+- All tunables that affect semantics are exposed in config (not buried constants), at minimum:
+  - `BIN_COUNT`, `FFT_SIZE`
+  - `decay`, `strength`, `kernelRadius`
+  - `biasMin`, `biasMax`
+  - `pB_min`, `pB_max`
 
 ---
 
-## Intended Audience
+## 6. Extension Seams
 
-- Curious developers
-- AI skeptics and AI optimists
-- LLM-assisted coders
-- Systems thinkers
-- Artists
-- Researchers exploring alternatives to gradient-based AI
+The Hearing baseline is intentionally built to accept deltas without rewriting the baseline:
 
-No credentials required.  
-No permission needed.
+### 6.1 Alternate Mappings (Allowed as Deltas)
+- Remapping freq→Z nonlinearly
+- Mapping pan→Y or pan→rotation bias
+- Spatial injection into multiple loci
+- Multi-resolution bias fields
 
----
+### 6.2 Alternate Feature Extraction (Allowed as Deltas)
+- Time-domain envelopes
+- Onset detection
+- Mel scaling
+- Temporal smoothing windows
 
-## Ethical Stance
+### 6.3 Additional Couplings (Not Baseline)
+Any of the following are **explicit deltas**:
 
-This project rejects:
-- control-first AI
-- opaque training regimes
-- priesthood architectures
-- forced alignment narratives
-
-Instead, it explores:
-- transparency
-- bounded agency
-- interpretability through behavior
-- human-in-the-loop meaning-making
+- bias→plasma (direct additions / flips)
+- bias→liquid jitter scaling
+- bias→solid writes
+- bias controlling renderer aesthetics
 
 ---
 
-## Status & Roadmap
+## 7. Minimal Testing / Sanity Checks
 
-**Current status:**  
-✔️ Stable  
-✔️ Bounded  
-✔️ Non-collapsing  
-✔️ Minimal  
+Baseline implementations SHOULD provide quick validation hooks:
 
-**Future experiments (non-binding):**
-- multi-grid interaction
-- delayed feedback loops
-- structural plasticity
-- interpretive layers (not control layers)
-
-Rule zero:
-> Never let interpretation overwrite the substrate.
+- **Ears Off:** bias field should decay toward ~0 over time.
+- **Ears On, silence:** bias should remain near 0 (with small noise if the mic is noisy).
+- **Ears On, tone:** bias should concentrate in a stable Z band with lateral displacement according to pan.
+- **No collapse:** substrate should not lock into a fixed point solely from sustained audio input.
 
 ---
 
-## Running It
+## 8. Minimal API Contract (Recommended)
 
-Just open the HTML file in a modern browser.
+To keep the module reusable, the Hearing baseline is well represented as:
 
-No build step.  
-No server.  
-No install.
+- `extractFeatures(audioCtx, analyserL, analyserR) -> { left, right }`
+- `biasField.ingest(left, right)`
+- `biasField.get() -> bias[]`
+- `couple(pB_base, bias[i]) -> pB[i]`
 
----
-
-## Final Note
-
-PhaseCube is not an answer.
-
-It is a **question posed in executable form**:
-
-> *What happens if we stop trying to force intelligence —  
-> and instead let systems dream?*
+The Dreaming substrate consumes only `bias[]` and stays otherwise untouched.
 
 ---
 
-🎄 Released December 25, 2025  
-∴ Kisuul the Chaos Gremlin  
-∴ and a helpful swarm of LLMs
+## 9. Versioning
+
+- **v0.1**: Establishes the canonical Hearing pipeline and the single coupling rule (probability modulation).
+- Future baseline bumps occur only when **semantics** change, not when constants are tuned.
+
+---
