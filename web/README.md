@@ -16,7 +16,7 @@ The web layer should stay minimal and avoid duplicating core logic:
 
 - `index.html` — container elements, canvas, and minimal controls for toggling modules.
 - `main.js` — initializes the PhaseCube core, wires Hearing bias (optional), and handles render loop scheduling.
-- `renderer/` (optional) — projection and color mapping utilities that consume core state without mutating it.
+- `renderer/`  — projection and color mapping utilities that consume core state without mutating it.
 
 ## Baseline Constraints
 - Keep visualization separate from simulation; no DOM access inside `src/` core modules.
@@ -27,3 +27,4 @@ The web layer should stay minimal and avoid duplicating core logic:
 - Add a minimal canvas renderer that projects points and colors by plasma/parity.
 - Provide UI toggles for seeded runs and for enabling/disabling Hearing bias injection.
 - Keep all new knobs documented and defaulted to baseline behavior.
+
