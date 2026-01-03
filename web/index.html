@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PhaseCube — Dreaming + Hearing Prototype</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #050505;
+      --panel: rgba(15, 15, 20, 0.85);
+      --accent: #9efcff;
+      --text: #e8e8e8;
+      --muted: #8b8b8b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Inter", "SF Mono", system-ui, -apple-system, sans-serif;
+      height: 100vh;
+      overflow: hidden;
+    }
+    #ui {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      padding: 12px;
+      background: var(--panel);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 10px;
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 10;
+      min-width: 320px;
+    }
+    #ui .row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    button {
+      background: #111723;
+      color: var(--text);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      padding: 8px 10px;
+      cursor: pointer;
+      transition: border-color 160ms ease, transform 120ms ease;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+    }
+    button:hover {
+      border-color: var(--accent);
+      transform: translateY(-1px);
+    }
+    button.secondary {
+      background: #0c0c0c;
+    }
+    #status {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px 12px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    #status strong {
+      color: var(--text);
+    }
+    #hint {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+    #phasecube {
+      width: 100vw;
+      height: 100vh;
+      display: block;
+      background: var(--bg);
+    }
+    #toast {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      padding: 10px 14px;
+      background: var(--panel);
+      color: var(--text);
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
+      font-size: 13px;
+      min-width: 240px;
+      max-width: 320px;
+      line-height: 1.4;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <div class="row">
+      <button id="toggle-run">Pause</button>
+      <button id="snapshot" class="secondary">Save PNG</button>
+    </div>
+    <div class="row">
+      <button id="enable-mic">Enable Mic</button>
+      <button id="enable-tone" class="secondary">Test Tone</button>
+      <button id="clear-bias" class="secondary">Clear Bias</button>
+    </div>
+    <div id="status">
+      <div>Step: <strong id="step">0</strong></div>
+      <div>Bias: <strong id="bias">idle</strong></div>
+      <div>Audio: <strong id="audio">off</strong></div>
+      <div>Seed: <strong id="seed">—</strong></div>
+    </div>
+    <div id="hint">Drag to rotate. Audio influences Path B probability only.</div>
+  </div>
+
+  <canvas id="phasecube"></canvas>
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
