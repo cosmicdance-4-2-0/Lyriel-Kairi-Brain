@@ -69,12 +69,26 @@ Anything under `IMPORTED_BASELINE/` is **history**, not a conformance target.
 
 ---
 
-## Running (Local)
-
-Until a formal build system exists, the intended baseline harness is simple static web serving.
+## Development tooling
 
 From the repository root:
 
 ```bash
-# Python (recommended)
+npm install
+```
+
+### Commands
+
+```bash
+# Lint source, tests, and web harness files
+npm run lint
+
+# Run the Node.js test suite
+npm test
+
+# Check formatting (Prettier)
+npm run format
+
+# Simple static web serving (existing baseline harness)
 python -m http.server 8000
+```
