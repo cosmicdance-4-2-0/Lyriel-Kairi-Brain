@@ -446,3 +446,4 @@ document.getElementById('clear-bias').addEventListener('click', () => {
 });
 
 requestAnimationFrame(frame);
+
