@@ -1,0 +1,21 @@
+{
+  "name": "lyriel-kairi-brain",
+  "version": "1.0.0",
+  "description": "Baseline PhaseCube substrate with modular biasing layers.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "eslint src tests web --max-warnings=0",
+    "test": "mkdir -p artifacts && node --test --test-reporter tap --test-reporter-destination ./artifacts/test-results.tap"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "eslint": "^9.39.2",
+    "globals": "^17.0.0"
+  }
+}

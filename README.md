@@ -1,5 +1,7 @@
 # Lyriel-Kairi-Brain
 
+[![CI](https://github.com/Lyriel-Kairi/Lyriel-Kairi-Brain/actions/workflows/ci.yml/badge.svg)](https://github.com/Lyriel-Kairi/Lyriel-Kairi-Brain/actions/workflows/ci.yml)
+
 A minimal, continuously-active swarm substrate intended to explore **pre-goal, pre-symbolic, non-teleological** agent dynamics in an inspectable, portable form.
 > *“Not everything with a mind is smart.  
 > Not everything that thinks needs a goal.”*
@@ -50,10 +52,20 @@ Anything under `IMPORTED_BASELINE/` is **history**, not a conformance target.
 
 ---
 
+## Continuous Integration
+
+The **CI** workflow (`.github/workflows/ci.yml`) runs on GitHub Actions against Node.js LTS to ensure baseline conformance:
+
+- Installs dependencies with `npm ci`, using npm caching to speed repeat runs.
+- Enforces linting via `npm run lint`, configured to fail on any warnings.
+- Executes `npm test` and publishes any generated artifacts (for now `artifacts/test-results.tap`) for debugging and traceability.
+
+---
+
 ## Baseline Rules (Read This Before Editing)
 
 1. **Specs are canonical.**  
-   The truth source is `docs/specs/*.md`, not the implementation.
+  The truth source is `docs/specs/*.md`, not the implementation.
 
 2. **The core must remain influenceable, not controllable.**  
    Input modules may bias probabilities and inject bounded energy, but must not overwrite state.

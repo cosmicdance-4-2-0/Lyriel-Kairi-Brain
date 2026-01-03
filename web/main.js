@@ -146,26 +146,26 @@ class HearingController {
 
   #disposeAnalyzers() {
     if (this.splitter) {
-      try { this.splitter.disconnect(); } catch (_) { /* noop */ }
+      try { this.splitter.disconnect(); } catch { /* noop */ }
       this.splitter = null;
     }
     if (this.analyserL) {
-      try { this.analyserL.disconnect(); } catch (_) { /* noop */ }
+      try { this.analyserL.disconnect(); } catch { /* noop */ }
       this.analyserL = null;
     }
     if (this.analyserR) {
-      try { this.analyserR.disconnect(); } catch (_) { /* noop */ }
+      try { this.analyserR.disconnect(); } catch { /* noop */ }
       this.analyserR = null;
     }
   }
 
   #teardownTone() {
     if (this.oscillator) {
-      try { this.oscillator.stop(); } catch (_) { /* noop */ }
-      try { this.oscillator.disconnect(); } catch (_) { /* noop */ }
+      try { this.oscillator.stop(); } catch { /* noop */ }
+      try { this.oscillator.disconnect(); } catch { /* noop */ }
     }
     if (this.gain) {
-      try { this.gain.disconnect(); } catch (_) { /* noop */ }
+      try { this.gain.disconnect(); } catch { /* noop */ }
     }
     this.oscillator = null;
     this.gain = null;
@@ -446,4 +446,3 @@ document.getElementById('clear-bias').addEventListener('click', () => {
 });
 
 requestAnimationFrame(frame);
-
