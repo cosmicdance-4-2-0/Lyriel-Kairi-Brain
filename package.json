@@ -1,0 +1,20 @@
+{
+  "name": "lyriel-kairi-brain",
+  "version": "1.0.0",
+  "description": "A minimal, continuously-active swarm substrate intended to explore pre-goal, pre-symbolic, non-teleological agent dynamics in an inspectable, portable form.",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "scripts": {
+    "lint": "eslint src tests web",
+    "test": "node --test",
+    "format": "prettier --check \"src/**/*.{js,json}\" \"tests/**/*.js\" \"web/**/*.{js,json,css,html}\""
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "eslint": "^9.39.2",
+    "eslint-config-prettier": "^9.1.2",
+    "globals": "^15.15.0",
+    "prettier": "^3.7.4"
+  }
+}
