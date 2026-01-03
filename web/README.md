@@ -28,3 +28,6 @@ The web layer should stay minimal and avoid duplicating core logic:
 - Provide UI toggles for seeded runs and for enabling/disabling Hearing bias injection.
 - Keep all new knobs documented and defaulted to baseline behavior.
 
+## Current Prototype
+- `index.html` + `main.js` run the seeded Dreaming core with optional Hearing bias injection.
+- Serve the repository root (for example: `python -m http.server 8000`) and open `/web/index.html` to interact.
